@@ -73,7 +73,7 @@ int main(int argc, char *argv[]){
 }
 #ifdef DEBUG
 void print_debug_info(chip8_t* chip) {
-    printf( "Address:0x%04x, Opcode: 0x%04x Desc:", chip->PC - 2, chip->instruction.opcode);
+    printf( "Address:0x%04x, Opcode: 0x%04x Desc:\n", chip->PC - 2, chip->instruction.opcode);
     switch  ((chip->instruction.opcode>> 12) & 0x0F){
         case 0x00:
             if (chip ->instruction.opcode == 0xE0){
@@ -91,7 +91,9 @@ void print_debug_info(chip8_t* chip) {
         case 0x02:
             printf("Calling subroutine at 0x%03X\n", chip->instruction.NNN);
             break;
-
+        case 0x06:
+            printf("Set register V%X to NN (0x%02x)\n", chip->instruction.X, chip->instruction.NN);
+            break;
         default:
             printf("Unknown opcode: 0x%X\n", chip->instruction.opcode);
             break;
@@ -111,18 +113,14 @@ void emulate_instruction(chip8_t* chip) {
 #if DEBUG
     print_debug_info(chip);
 #endif
-
+//===========================OPCODE=====================================
     switch  ((chip->instruction.opcode>> 12) & 0x0F){
         case 0x00:
             if (chip ->instruction.opcode == 0xE0){
             memset(chip->display, 0, sizeof(chip->display));   
             } 
             else if (chip->instruction.opcode == 0xEE){
-                if (chip->SP > chip->stack) {
-                    chip->PC = *--chip->SP;
-                } else {
-                    printf("Cannot return: stack is empty\n");
-                }
+                chip->PC = *--chip->SP;
             }
             break;
         case 0x02:
@@ -133,6 +131,23 @@ void emulate_instruction(chip8_t* chip) {
                 printf("Cannot call subroutine: stack is full\n");
             }
             break;
+        case 0x03:
+            if (chip-> instruction.X == chip-> instruction.NN){
+                chip->PC += 2;
+            }
+            break;
+        case 0x06:
+            chip->V[chip -> instruction.X]= chip->instruction.NN;
+            break;
+        case 0x0A:
+            chip -> I = chip->instruction.NNN;
+            break;
+        case 0x0D:
+            break;
+            
+        
+        
+
         default:
             printf("Unknown opcode: 0x%X\n", chip->instruction.opcode);
             break;
