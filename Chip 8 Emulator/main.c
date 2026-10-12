@@ -14,9 +14,12 @@
 typedef struct config config_t;
 typedef struct chip8_t chip8_t;
 bool SDL_start(chip8_t* chip, config_t config);
-bool chip_init(chip8_t* chip, const char *rom_file_path);
-void emulate_instruction(chip8_t* chip);
+bool chip_init(chip8_t* chip, const char *rom_file_path, config_t config);
+void emulate_instruction(chip8_t* chip, config_t config);
 void clear_screen(SDL_Renderer *renderer, config_t config);
+void update_screen(SDL_Renderer *renderer, chip8_t* chip8, config_t config);
+
+
 typedef struct instructions_t{
     uint16_t opcode;
     uint16_t NNN; // 12 bit address/counter
@@ -36,7 +39,7 @@ typedef struct chip8_t {
     uint8_t sound_timer;
     uint8_t delay_timer;
     uint8_t keypad[16];
-    uint8_t display[64 * 32];
+    bool display[64 * 32];
     instructions_t instruction;
     bool running;
     bool isPaused;
@@ -64,7 +67,7 @@ int main(int argc, char *argv[]){
     config.fg = 0xFFFFFFFF;
     config.bg = 0x00000000;
     config.scale = 16;
-    if (!chip_init(&chip, argv[1])) {
+    if (!chip_init(&chip, argv[1], config)) {
         return 1;
     }
 
@@ -101,7 +104,7 @@ void print_debug_info(chip8_t* chip) {
 }
 #endif
 
-void emulate_instruction(chip8_t* chip) {
+void emulate_instruction(chip8_t* chip, config_t config) {
     chip->instruction.opcode = (chip->memory[chip->PC] << 8) | chip->memory[chip->PC + 1];
     chip->PC += 2;
 
@@ -116,12 +119,15 @@ void emulate_instruction(chip8_t* chip) {
 //===========================OPCODE=====================================
     switch  ((chip->instruction.opcode>> 12) & 0x0F){
         case 0x00:
-            if (chip ->instruction.opcode == 0xE0){
+            if (chip ->instruction.opcode == 0x00E0){
             memset(chip->display, 0, sizeof(chip->display));   
             } 
             else if (chip->instruction.opcode == 0xEE){
                 chip->PC = *--chip->SP;
             }
+            break;
+        case 0x01:
+            chip->PC = chip->instruction.NNN;
             break;
         case 0x02:
             if (chip->SP < chip->stack + 16) {
@@ -132,31 +138,52 @@ void emulate_instruction(chip8_t* chip) {
             }
             break;
         case 0x03:
-            if (chip-> instruction.X == chip-> instruction.NN){
+            if (chip->V[chip->instruction.X] == chip->instruction.NN){
                 chip->PC += 2;
             }
             break;
         case 0x06:
             chip->V[chip -> instruction.X]= chip->instruction.NN;
             break;
+        case 0x07:
+            chip -> V[chip->instruction.X] += chip -> instruction.NN;
+            break;
         case 0x0A:
             chip -> I = chip->instruction.NNN;
             break;
-        case 0x0D:
+        case 0x0D:{
+            uint8_t X_Coord = chip -> V[chip-> instruction.X] % config.SCREEN_WIDTH;
+            uint8_t Y_Coord = chip -> V[chip-> instruction.Y] % config.SCREEN_HEIGHT;
+            const uint8_t X_OG = X_Coord;
+            chip -> V[0xF] = 0;
+            for (uint8_t i = 0; i<chip->instruction.N; i++){
+                const uint8_t sprite = chip -> memory[chip->I + i];
+                X_Coord = X_OG; 
+                for (int8_t j = 7; j>= 0; j--){
+                    bool *pixel = &chip->display[Y_Coord * config.SCREEN_WIDTH + X_Coord];
+                    if ((sprite &(1<<j)) && *pixel){
+                        chip->V[0xf]= 1;
+                    }
+                    *pixel ^=  (sprite & (1<<j));
+
+                    if (++X_Coord >= config.SCREEN_WIDTH) break;
+                    }
+                if (++Y_Coord>= config.SCREEN_HEIGHT) break;
+                }
+            }   
             break;
-            
-        
         
 
-        default:
-            printf("Unknown opcode: 0x%X\n", chip->instruction.opcode);
+        default:{
             break;
+        }
+    
     }
 }
 
 
 
-bool chip_init(chip8_t* chip, const char *rom_file_path) {
+bool chip_init(chip8_t* chip, const char *rom_file_path, config_t config) {
     const uint8_t Font[80] ={
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
     0x20, 0x60, 0x20, 0x20, 0x70, // 1
@@ -274,21 +301,43 @@ bool SDL_start(chip8_t* chip, config_t config) {
             SDL_Delay(16);
             continue;
         }
-        emulate_instruction(chip);
-
-        if (!SDL_RenderClear(renderer)) {
-            printf("SDL_RenderClear failed: %s\n", SDL_GetError());
-            chip->running = false;
-            break;
-        }
-        SDL_RenderPresent(renderer);
+        emulate_instruction(chip, config);
+        update_screen (renderer, chip, config);
         SDL_Delay(16);
+        
     }
 
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
     return true;
+}
+void update_screen(SDL_Renderer *renderer, chip8_t* chip, config_t config){
+    SDL_FRect rect = {.x = 0, .y = 0, .w = (float)config.scale, .h = (float)config.scale};
+
+    const uint8_t fg_r = (config.fg >> 24) & 0xFF;
+    const uint8_t fg_g = (config.fg >> 16) & 0xFF;
+    const uint8_t fg_b = (config.fg >> 8) & 0xFF;
+    const uint8_t fg_a = config.fg & 0xFF;
+
+    const uint8_t bg_r = (config.bg >> 24) & 0xFF;
+    const uint8_t bg_g = (config.bg >> 16) & 0xFF;
+    const uint8_t bg_b = (config.bg >> 8) & 0xFF;
+    const uint8_t bg_a = config.bg & 0xFF;
+
+    SDL_SetRenderDrawColor(renderer, bg_r, bg_g, bg_b, bg_a);
+    SDL_RenderClear(renderer);
+
+    for (uint32_t i = 0; i <sizeof chip->display; i++){
+        rect.x = (float)(i % config.SCREEN_WIDTH * config.scale);
+        rect.y = (float)(i / config.SCREEN_WIDTH * config.scale);
+
+        if (chip ->display[i]) {
+            SDL_SetRenderDrawColor(renderer, fg_r,fg_g,fg_b,fg_a);
+            SDL_RenderFillRect(renderer, &rect);
+        }
+    }
+    SDL_RenderPresent(renderer);
 }
 
 void clear_screen(SDL_Renderer *renderer, config_t config) {
